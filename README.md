@@ -24,5 +24,9 @@ Staging:
 $ python -m src.invoice.templates_cli reject acme_corporation_123_main_street_invoice_72246d14
 Rejected (deleted from staging).
 
+$ docker exec -it redis redis-cli
+127.0.0.1:6379> keys *
+
+
 ```
 System packages for OCR: `sudo apt-get install -y tesseract-ocr poppler-utils`

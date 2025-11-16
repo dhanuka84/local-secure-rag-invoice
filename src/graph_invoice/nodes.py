@@ -169,38 +169,46 @@ def should_pass_or_review(state) -> str:
 
 
 
+import os
+from src.invoice.template_cache import TemplateCache
+from src.invoice.metrics import TemplateMetrics
+from src.invoice.cerbos_client import can_promote_template
+
 def node_promote_template(state):
-    """Promote template from learned/staging/refined to active when vision passed and Cerbos allows."""
-    from src.invoice.template_cache import TemplateCache
+    """
+    If Cerbos allows, move template from staging → active.
 
-    role = state.get("role", "employee")
-    source = state.get("template_source", "")
-    signature = state.get("signature", "")
-    vision_pass = bool(state.get("vision_pass", False))
-    vision_score = float(state.get("vision_score", 0.0))
+    Expects in state:
+      - signature: template signature key
+      - template_source: current stage (e.g. "staging", "learned")
+    """
+    sig = state.get("signature")
+    stage = state.get("template_source", "staging")
 
-    if not (vision_pass and vision_score >= 0.7):
-        state["promotion_status"] = "skipped_vision"
-        return state
+    # Role via state or environment
+    role = state.get("role") or os.getenv("APP_ROLE", "employee")
 
-    if source not in ("learned", "staging", "refined"):
-        state["promotion_status"] = "skipped_source"
-        return state
+    cache = TemplateCache()
+    metrics = TemplateMetrics()
 
-    allowed = can_promote_template(role, stage="staging")
+    # Call Cerbos
+    allowed = can_promote_template(role=role, stage=stage)
+
     if not allowed:
         state["promotion_status"] = "denied"
         return state
 
-    cache = TemplateCache()
-    if cache.promote(signature):
+    # Try to promote in our local cache
+    promoted = cache.promote(sig)
+    if promoted:
         state["template_source"] = "active"
         state["promotion_status"] = "promoted"
-        TemplateMetrics().record_promotion(signature)
+        metrics.record_promotion(sig)
     else:
-        state["promotion_status"] = "no_staging_template"
+        state["promotion_status"] = "promote_failed"
 
     return state
+
 
 
 def node_done(state):
