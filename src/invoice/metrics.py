@@ -53,6 +53,11 @@ class TemplateMetrics:
             sig = key.split("invoice_metrics:")[-1]
             out[sig] = self.get(sig)
         return out
+    
+    
+    def record_success(self, signature: str):
+        self._bump(signature, "success_count")
+
 
 
 if __name__ == "__main__":

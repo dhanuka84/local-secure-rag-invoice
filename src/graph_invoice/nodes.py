@@ -174,31 +174,57 @@ from src.invoice.template_cache import TemplateCache
 from src.invoice.metrics import TemplateMetrics
 from src.invoice.cerbos_client import can_promote_template
 
-def node_promote_template(state):
+def node_done(state):
     """
-    If Cerbos allows, move template from staging → active.
-
-    Expects in state:
-      - signature: template signature key
-      - template_source: current stage (e.g. "staging", "learned")
+    Final node. Optionally records success metrics.
     """
     sig = state.get("signature")
-    stage = state.get("template_source", "staging")
+    if sig:
+        # Consider a run "successful" if:
+        #   - vision_pass is True
+        #   - we have fields
+        vpass = state.get("vision_pass", False)
+        fields = state.get("fields") or {}
+        if vpass and fields:
+            TemplateMetrics().record_success(sig)
 
-    # Role via state or environment
+    state["done"] = True
+    return state
+
+
+import os
+from src.invoice.template_cache import TemplateCache
+from src.invoice.metrics import TemplateMetrics
+from src.invoice.cerbos_client import can_promote_template
+
+AUTO_PROMOTE_THRESHOLD = int(os.getenv("AUTO_PROMOTE_THRESHOLD", "3"))
+
+
+def node_promote_template(state):
+    sig = state.get("signature")
+    stage = state.get("template_source", "staging")
     role = state.get("role") or os.getenv("APP_ROLE", "employee")
 
     cache = TemplateCache()
     metrics = TemplateMetrics()
 
-    # Call Cerbos
+    # Check metrics
+    m = metrics.get(sig) if sig else {}
+    success_count = m.get("success_count", 0)
+
+    if success_count < AUTO_PROMOTE_THRESHOLD:
+        # Not enough successful runs; force manual review path
+        state["promotion_status"] = f"pending_success_{success_count}"
+        return state
+
+    # Now enough successes; ask Cerbos
     allowed = can_promote_template(role=role, stage=stage)
 
     if not allowed:
         state["promotion_status"] = "denied"
         return state
 
-    # Try to promote in our local cache
+    # Promote in cache
     promoted = cache.promote(sig)
     if promoted:
         state["template_source"] = "active"
@@ -208,6 +234,7 @@ def node_promote_template(state):
         state["promotion_status"] = "promote_failed"
 
     return state
+
 
 
 
