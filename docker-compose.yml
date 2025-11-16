@@ -1,0 +1,43 @@
+
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports: ["6379:6379"]
+
+
+  cerbos:
+    image: ghcr.io/cerbos/cerbos:latest
+    container_name: cerbos
+    ports: ["3592:3592"]
+    volumes: [ "./policies:/policies:ro" ]
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+
+  milvus:
+    image: milvusdb/milvus:v2.4.3
+    container_name: milvus
+    command: ["milvus", "run", "standalone"]
+    environment:
+      - ETCD_USE_EMBED=true
+      - MINIO_USE_EMBED=true
+      - COMMON_STORAGETYPE=local
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    volumes:
+      - ./milvus_data:/var/lib/milvus
+
+
+volumes:
+  ollama:
