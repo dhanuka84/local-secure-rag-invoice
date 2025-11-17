@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>A Tiny Guide to Our Invoice Processing Flow (v6)</title>
+  <style>
+    :root { --bg: #0b1020; --card:#12182a; --text:#e7ecff; --muted:#9aa8c7; --accent:#77b6ff; }
+    @media (prefers-color-scheme: light) { :root { --bg:#fafcff; --card:#ffffff; --text:#101728; --muted:#5b6a86; --accent:#0f62fe; } }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background:var(--bg); color:var(--text); }
+    main { max-width: 880px; margin: 0 auto; padding: 32px 18px 60px; }
+    .card { background:var(--card); border:1px solid rgba(255,255,255,.06); border-radius:16px; padding:16px; margin:18px 0; }
+    .mermaid { background: var(--card); border-radius:12px; padding: 12px; }
+    h1, h2 { margin-bottom: 12px; }
+    code { background: rgba(127,127,127,.15); padding: .1em .35em; border-radius: 6px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Make markmap SVG use almost the whole card */
+    .card-mindmap { padding: 16px 8px 8px; }
+    .card-mindmap h2 { margin-left: 8px; }
+    .markmap {
+      width: 100%;
+      height: 72vh;
+      min-height: 380px;
+      margin: 0;
+      display: block;
+    }
+  </style>
+
+  <!-- Mermaid -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: true, securityLevel: 'loose' });
+  </script>
+
+  <!-- Markmap -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markmap-lib@0.16.0/dist/index.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markmap-view@0.16.0/dist/index.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/markmap-autoloader@0.16.0"></script>
+</head>
+<body>
+<main>
+
+<h1>A Tiny Guide to Our Invoice Processing Flow</h1>
+
+<div class="card">
+  <h2>Flow Diagram</h2>
+  <div class="mermaid">
+flowchart TD
+  subgraph Initialization
+    A["Start: run_invoice_graph.py"]
+  end
+
+  subgraph Graph_Execution
+    B["1. extract_pdf"]
+    C["2. ocr_if_needed"]
+    D["3. signature"]
+    E["4. check_cache"]
+    F{"5. should_reuse_or_search"}
+    G["6a. milvus_suggest\n(similarity search)"]
+    H{"7. should_use_suggest_or_learn"}
+    I["8a. learn_and_stage\n(create staging template)"]
+    J1["6b. extract_using_suggested_template"]
+    J2["8b. extract_using_learned_template"]
+    R["9. extract_fields\n(normalize + math checks)"]
+    K["10. vision_validate"]
+    L{"11. should_pass_or_review"}
+    M["12a. promote_template"]
+    N["12b. mark_for_review"]
+    O["13. done"]
+    P["14. END"]
+  end
+
+  subgraph Final_Output
+    Q["Print JSON Summary"]
+  end
+
+  A --> B --> C --> D --> E --> F
+  F -- "reuse" --> R
+  F -- "search" --> G --> H
+  H -- "use_suggest" --> J1 --> R
+  H -- "learn" --> I --> J2 --> R
+  R --> K --> L
+  L -- "pass" --> M --> O
+  L -- "review" --> N --> O
+  O --> P --> Q
+  </div>
+</div>
+
+<div class="card card-mindmap">
+  <h2>Mind Map (Expandable + Zoomable)</h2>
+  <pre class="markmap">
+# Invoice Processing
+
+## Initialization
+- run `run_invoice_graph.py`
+- state: { pdf_path, role="manager" }
+
+## Extract
+- extract_pdf
+- ocr_if_needed
+
+## Signature & Cache
+- signature (hash + vendor)
+- check_cache
+
+## Decision: reuse or search
+- reuse → **9. extract_fields**
+- search → **6a. milvus_suggest**
+
+## After suggest
+- Found Similar → **6b. extract_using_suggested_template**
+- Learn New → **8a. learn_and_stage** → **8b. extract_using_learned_template** → **9. extract_fields**
+
+## Validate
+- vision_validate → should_pass_or_review
+
+## Finalize
+- pass → promote_template → done
+- review → mark_for_review → done
+
+## Output
+- END → print JSON summary
+
+## Env & Auth
+- APP_ROLE="manager"
+- AUTO_PROMOTE_THRESHOLD=1
+  </pre>
+</div>
+
+<p>Tools used: <a href="https://mermaid.js.org/">Mermaid</a> & <a href="https://markmap.js.org/">Markmap</a>. Expand nodes by clicking, zoom with mouse scroll, drag to pan.</p>
+
+</main>
+</body>
+</html>
