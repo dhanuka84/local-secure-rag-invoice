@@ -1,4 +1,4 @@
-# **![][image1]**
+# **Building a Context-Aware AI System That Learns, Reuses, Retrieves, Decides, and Validates — for Automated Invoice Processing**
 
 Automating invoice processing sounds simple — until you try to do it securely, reliably, and at scale.
 
