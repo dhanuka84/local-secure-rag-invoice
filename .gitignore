@@ -1,6 +1,9 @@
 .venv/
 
-.milvus_data/
+milvus_data/
+rdb_data_meta_kv/
+rdb_data/
+data/
 
 __pycache__/
 *.pyc
