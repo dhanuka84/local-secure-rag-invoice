@@ -3,8 +3,8 @@ import json
 from typing import List, Dict
 from langchain_ollama import OllamaLLM
 
-VLM = OllamaLLM(model="llava")
-
+#VLM = OllamaLLM(model="llava")
+VLM = OllamaLLM(model="qwen3-vl:8b")
 
 def _strip_code_fence(text: str) -> str:
     text = text.strip()

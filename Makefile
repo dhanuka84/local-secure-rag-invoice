@@ -4,7 +4,8 @@
 models:
 	-ollama pull llama3.2 || true
 	-ollama pull nomic-embed-text || true
-	-ollama pull llava || true
+	#-ollama pull llava || true
+	-ollama pull qwen3-vl:8b || true
 
 run:
 	python -m venv .venv && . .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt
