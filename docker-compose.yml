@@ -10,9 +10,16 @@ services:
   cerbos:
     image: ghcr.io/cerbos/cerbos:latest
     container_name: cerbos
-    ports: ["3592:3592"]
-    volumes: [ "./policies:/policies:ro" ]
+    ports:
+      - "3592:3592"
+    volumes:
+      - ./policies:/policies:ro
+      - ./cerbos-config:/config:ro
+    command:
+      - server
+      - --config=/config/cerbos.yaml
     restart: unless-stopped
+
 
   ollama:
     image: ollama/ollama:latest

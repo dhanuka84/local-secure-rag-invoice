@@ -121,7 +121,7 @@ def node_learn_and_stage(state):
     cache = TemplateCache()
     cache.set_staging(state["signature"], tmpl)
     state["template"] = tmpl
-    state["template_source"] = "learned"
+    state["template_source"] = "staging"
     return state
 
 
