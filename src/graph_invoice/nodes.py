@@ -1,3 +1,6 @@
+import os
+import json
+
 
 from src.invoice.pdf_io import pdf_to_text_and_images, ocr_if_needed
 from src.invoice.signature import build_signature
@@ -7,11 +10,10 @@ from src.invoice.template_learner import learn_regexes
 from src.invoice.vision_validate import validate_with_vision
 from src.invoice.cerbos_client import can_promote_template
 from src.invoice.metrics import TemplateMetrics
-from src.invoice.template_learner import refine_regexes
-from src.invoice.ocr_layout import ocr_with_layout
-from src.invoice.layoutlm_extract import extract_with_layoutlm
-from src.invoice.math_validate import validate_line_items_math
+from src.invoice.doc_vlm_extract import extract_with_doc_vlm
 
+DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
+from src.invoice.template_learner import refine_regexes
 
 from typing import List
 from langchain_ollama.embeddings import OllamaEmbeddings
@@ -65,16 +67,6 @@ def node_ocr_if_needed(state):
     state["text"] = ocr_if_needed(state["text"], state.get("images", []))
     return state
 
-
-def node_ocr_with_layout(state):
-    """Run layout-aware OCR to populate `pages` (and optionally update `text`)."""
-    result = ocr_with_layout(state["pdf_path"])
-    if not state.get("text") and result.get("text"):
-        state["text"] = result["text"]
-    state["pages"] = result.get("pages", [])
-    return state
-
-
 def node_signature(state):
     sig = build_signature(state["text"])
     state["signature"] = sig
@@ -121,7 +113,7 @@ def node_learn_and_stage(state):
     cache = TemplateCache()
     cache.set_staging(state["signature"], tmpl)
     state["template"] = tmpl
-    state["template_source"] = "staging"
+    state["template_source"] = "learned"
     return state
 
 
@@ -156,30 +148,6 @@ def node_extract_fields(state):
 
 
 
-
-def node_layoutlm_extract_fields(state):
-    """Use LayoutLM to extract header fields and line items from OCR pages."""
-    pages = state.get("pages") or []
-    if not pages:
-        state["ml_header_fields"] = {}
-        state["ml_line_items"] = []
-        return state
-
-    result = extract_with_layoutlm(pages)
-    state["ml_header_fields"] = result.get("header", {})
-    state["ml_line_items"] = result.get("line_items", [])
-    return state
-
-
-def node_math_validate_line_items(state):
-    """Run numeric validation over LayoutLM-extracted line items."""
-    items = state.get("ml_line_items") or []
-    validation = validate_line_items_math(items)
-    state["line_item_validation"] = validation
-    state["math_pass"] = bool(validation.get("all_line_items_ok", True))
-    return state
-
-
 def node_vision_validate(state):
     from src.invoice.vision_validate import validate_with_vision
     verdict = validate_with_vision(
@@ -199,9 +167,7 @@ def node_vision_validate(state):
 
 
 def should_pass_or_review(state) -> str:
-    vision_ok = bool(state.get("vision_pass", False)) and float(state.get("vision_score", 0.0)) >= 0.7
-    math_ok = bool(state.get("math_pass", True))
-    if vision_ok and math_ok:
+    if state.get("vision_pass", False) and float(state.get("vision_score", 0.0)) >= 0.7:
         return "pass"
     if int(state.get("refine_attempts", 0)) >= 1:
         return "review_final"
@@ -209,10 +175,12 @@ def should_pass_or_review(state) -> str:
 
 
 
-
 import os
 from src.invoice.template_cache import TemplateCache
 from src.invoice.metrics import TemplateMetrics
+from src.invoice.doc_vlm_extract import extract_with_doc_vlm
+
+DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
 from src.invoice.cerbos_client import can_promote_template
 
 def node_done(state):
@@ -236,6 +204,9 @@ def node_done(state):
 import os
 from src.invoice.template_cache import TemplateCache
 from src.invoice.metrics import TemplateMetrics
+from src.invoice.doc_vlm_extract import extract_with_doc_vlm
+
+DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
 from src.invoice.cerbos_client import can_promote_template
 
 AUTO_PROMOTE_THRESHOLD = int(os.getenv("AUTO_PROMOTE_THRESHOLD", "3"))
@@ -249,16 +220,6 @@ def node_promote_template(state):
     cache = TemplateCache()
     metrics = TemplateMetrics()
 
-    # NEW: If template already active, skip promotion logic entirely
-    # (Avoids confusing "denied" messages)
-    if stage == "active":
-        # If no prior status set, mark explicitly
-        if "promotion_status" not in state:
-            state["promotion_status"] = "already_active"
-        return state
-
-    # --- ORIGINAL LOGIC BELOW ---
-
     # Check metrics
     m = metrics.get(sig) if sig else {}
     success_count = m.get("success_count", 0)
@@ -268,14 +229,14 @@ def node_promote_template(state):
         state["promotion_status"] = f"pending_success_{success_count}"
         return state
 
-    # Enough successes; now enforce Cerbos RBAC
+    # Now enough successes; ask Cerbos
     allowed = can_promote_template(role=role, stage=stage)
 
     if not allowed:
         state["promotion_status"] = "denied"
         return state
 
-    # Promote in cache (staging --> active)
+    # Promote in cache
     promoted = cache.promote(sig)
     if promoted:
         state["template_source"] = "active"
@@ -347,11 +308,13 @@ def node_auto_refine_template(state):
     return state
 
 
-
-from src.invoice.doc_vlm_extract import extract_with_doc_vlm
-
 def node_doc_vlm_extract_fields(state: dict) -> dict:
     pdf_path = state.get("pdf_path") or state.get("pdf")
+
+    if DOCVLM_DEBUG:
+        print("------ DOCVLM NODE CALLED ------")
+        print("PDF:", pdf_path)
+
     if not pdf_path:
         state.setdefault("fields", {})
         state.setdefault("ml_line_items", [])
@@ -359,6 +322,16 @@ def node_doc_vlm_extract_fields(state: dict) -> dict:
         return state
 
     result = extract_with_doc_vlm(pdf_path)
+
+    if DOCVLM_DEBUG:
+        print("------ RAW DONUT SEQUENCE ------")
+        print(result.get("model_output"))
+        print("------ DONUT JSON ------")
+        try:
+            print(json.dumps(result.get("raw"), ensure_ascii=False, indent=2))
+        except Exception:
+            print(result.get("raw"))
+
     fields = result.get("fields") or {}
     line_items = result.get("line_items") or []
 

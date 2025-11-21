@@ -4,7 +4,6 @@ from .nodes import (
     node_doc_vlm_extract_fields,
     node_extract_pdf,
     node_ocr_if_needed,
-    node_ocr_with_layout,
     node_signature,
     node_check_cache,
     should_reuse_or_search,
@@ -12,8 +11,6 @@ from .nodes import (
     should_use_suggest_or_learn,
     node_learn_and_stage,
     node_extract_fields,
-    node_layoutlm_extract_fields,
-    node_math_validate_line_items,
     node_vision_validate,
     should_pass_or_review,
     node_promote_template,
@@ -43,15 +40,12 @@ def build_invoice_graph():
     # ---------- Nodes ----------
     g.add_node("extract_pdf",       node_extract_pdf)
     g.add_node("ocr_if_needed",     node_ocr_if_needed)
-    g.add_node("ocr_with_layout",   node_ocr_with_layout)
     g.add_node("signature",         node_signature)
     g.add_node("check_cache",       node_check_cache)
 
     g.add_node("milvus_suggest",    node_milvus_suggest)
     g.add_node("learn_and_stage",   node_learn_and_stage)
     g.add_node("extract_fields",    node_extract_fields)
-    g.add_node("layoutlm_extract_fields", node_layoutlm_extract_fields)
-    g.add_node("math_validate_line_items", node_math_validate_line_items)
     g.add_node("vision_validate",   node_vision_validate)
 
     g.add_node("promote_template",  node_promote_template)
@@ -61,8 +55,7 @@ def build_invoice_graph():
     # ---------- Linear skeleton ----------
     g.set_entry_point("extract_pdf")
     g.add_edge("extract_pdf", "ocr_if_needed")
-    g.add_edge("ocr_if_needed", "ocr_with_layout")
-    g.add_edge("ocr_with_layout", "signature")
+    g.add_edge("ocr_if_needed", "signature")
     g.add_edge("signature", "check_cache")
 
     # ---------- Cache decision ----------
@@ -92,6 +85,7 @@ def build_invoice_graph():
     )
 
     # After learning a new template, apply it via extract_fields
+    g.add_edge("doc_vlm_extract_fields", "learn_and_stage")
     g.add_edge("learn_and_stage", "extract_fields")
 
     # ---------- Extraction → vision ----------
@@ -116,4 +110,5 @@ def build_invoice_graph():
     g.add_edge("done", END)
 
     # IMPORTANT: return compiled graph (has .invoke)
+    g.add_node("doc_vlm_extract_fields", node_doc_vlm_extract_fields)
     return g.compile()

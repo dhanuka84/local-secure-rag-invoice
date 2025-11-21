@@ -38,3 +38,5 @@ cerbos>=0.7.0
 
 # PDF generation (promotions, export)
 reportlab>=4.0.7
+
+poppler-utils
