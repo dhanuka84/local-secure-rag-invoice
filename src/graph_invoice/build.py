@@ -1,6 +1,7 @@
 from langgraph.graph import StateGraph, END
 from .state import InvoiceState
 from .nodes import (
+    node_doc_vlm_extract_fields,
     node_extract_pdf,
     node_ocr_if_needed,
     node_ocr_with_layout,
@@ -86,7 +87,7 @@ def build_invoice_graph():
             # Use suggested template directly
             "use_suggest": "extract_fields",
             # Need to learn a new template and stage it
-            "learn": "learn_and_stage",
+            "learn": "doc_vlm_extract_fields",
         },
     )
 

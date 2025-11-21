@@ -113,7 +113,7 @@ def should_use_suggest_or_learn(state) -> str:
         if t:
             state["template"] = t
             state["template_source"] = "suggested"
-            return "use_suggest" # <-- FIXED: Changed from "suggested" to "use_suggest"
+            return "suggested"
     return "learn"
 
 def node_learn_and_stage(state):
@@ -344,4 +344,37 @@ def node_auto_refine_template(state):
     state["template_source"] = "refined"
     state["refine_attempts"] = attempts + 1
     state["auto_refine_status"] = "refined_total"
+    return state
+
+
+
+from src.invoice.doc_vlm_extract import extract_with_doc_vlm
+
+def node_doc_vlm_extract_fields(state: dict) -> dict:
+    pdf_path = state.get("pdf_path") or state.get("pdf")
+    if not pdf_path:
+        state.setdefault("fields", {})
+        state.setdefault("ml_line_items", [])
+        state["template_source"] = "doc_vlm"
+        return state
+
+    result = extract_with_doc_vlm(pdf_path)
+    fields = result.get("fields") or {}
+    line_items = result.get("line_items") or []
+
+    current = state.get("fields") or {}
+    current.update({
+        "invoice_no": fields.get("invoice_no", current.get("invoice_no")),
+        "date": fields.get("date", current.get("date")),
+        "subtotal": fields.get("subtotal", current.get("subtotal")),
+        "tax": fields.get("tax", current.get("tax")),
+        "total": fields.get("total", current.get("total")),
+        "tax_rate": fields.get("tax_rate", current.get("tax_rate")),
+    })
+    state["fields"] = current
+    state["ml_line_items"] = line_items
+
+    state["doc_vlm_raw"] = result.get("raw")
+    state["doc_vlm_output"] = result.get("model_output")
+    state["template_source"] = "doc_vlm"
     return state
