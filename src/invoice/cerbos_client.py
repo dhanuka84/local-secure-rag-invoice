@@ -10,44 +10,33 @@ _client = CerbosClient(host=CERBOS_HOST)
 
 def can_promote_template(role: str, stage: str) -> bool:
     """
-    Ask Cerbos: can this role promote a template in this stage?
-
-    Matches policy:
-      resource: "template"
-      action:  "promote"
-      attr:    { "stage": <stage> }
+    Ask Cerbos whether this role can promote a template in this stage.
+    Uses is_allowed(), which is available in all recent Python SDK versions.
     """
+
     principal = Principal(
         id="user",
-        roles=[role],           # must be ["manager"] or ["employee"]
+        roles=[role],
     )
 
     resource = Resource(
-        id="invoice_template",  # arbitrary ID, not used in the policy
-        kind="template",        # MUST match resource: "template" in YAML
-        attr={"stage": stage},  # MUST match condition on request.resource.attr.stage
+        id="invoice_template",
+        kind="template",
+        attr={"stage": stage},
     )
 
     try:
-        decision = _client.check_resource(
-            principal=principal,
-            resource=resource,
-            actions={"promote"},
-        )
-
-        # Newer SDK: decision.is_allowed("promote")
-        if hasattr(decision, "is_allowed") and callable(decision.is_allowed):
-            return decision.is_allowed("promote")
-
-        # Fallback: look at decision.actions dict
-        actions = getattr(decision, "actions", None)
-        if isinstance(actions, dict):
-            return bool(actions.get("promote"))
-
-        # If we couldn't interpret the decision, be strict or permissive
-        return False if CERBOS_STRICT else True
+        # Recommended modern API:
+        allowed = _client.is_allowed("promote", principal, resource)
+        return bool(allowed)
 
     except Exception as e:
         print(f"[CERBOS] Error while checking promote: {e}")
-        # In dev, you can choose to allow on failure
-        return False if CERBOS_STRICT else True
+
+        # Strict mode: deny if Cerbos is unreachable or errors
+        if CERBOS_STRICT:
+            return False
+
+        # Non-strict mode: allow on failure (developer-friendly)
+        return True
+

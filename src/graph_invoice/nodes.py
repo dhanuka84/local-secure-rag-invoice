@@ -8,6 +8,10 @@ from src.invoice.vision_validate import validate_with_vision
 from src.invoice.cerbos_client import can_promote_template
 from src.invoice.metrics import TemplateMetrics
 from src.invoice.template_learner import refine_regexes
+from src.invoice.ocr_layout import ocr_with_layout
+from src.invoice.layoutlm_extract import extract_with_layoutlm
+from src.invoice.math_validate import validate_line_items_math
+
 
 from typing import List
 from langchain_ollama.embeddings import OllamaEmbeddings
@@ -60,6 +64,16 @@ def node_extract_pdf(state):
 def node_ocr_if_needed(state):
     state["text"] = ocr_if_needed(state["text"], state.get("images", []))
     return state
+
+
+def node_ocr_with_layout(state):
+    """Run layout-aware OCR to populate `pages` (and optionally update `text`)."""
+    result = ocr_with_layout(state["pdf_path"])
+    if not state.get("text") and result.get("text"):
+        state["text"] = result["text"]
+    state["pages"] = result.get("pages", [])
+    return state
+
 
 def node_signature(state):
     sig = build_signature(state["text"])
@@ -142,6 +156,30 @@ def node_extract_fields(state):
 
 
 
+
+def node_layoutlm_extract_fields(state):
+    """Use LayoutLM to extract header fields and line items from OCR pages."""
+    pages = state.get("pages") or []
+    if not pages:
+        state["ml_header_fields"] = {}
+        state["ml_line_items"] = []
+        return state
+
+    result = extract_with_layoutlm(pages)
+    state["ml_header_fields"] = result.get("header", {})
+    state["ml_line_items"] = result.get("line_items", [])
+    return state
+
+
+def node_math_validate_line_items(state):
+    """Run numeric validation over LayoutLM-extracted line items."""
+    items = state.get("ml_line_items") or []
+    validation = validate_line_items_math(items)
+    state["line_item_validation"] = validation
+    state["math_pass"] = bool(validation.get("all_line_items_ok", True))
+    return state
+
+
 def node_vision_validate(state):
     from src.invoice.vision_validate import validate_with_vision
     verdict = validate_with_vision(
@@ -161,11 +199,14 @@ def node_vision_validate(state):
 
 
 def should_pass_or_review(state) -> str:
-    if state.get("vision_pass", False) and float(state.get("vision_score", 0.0)) >= 0.7:
+    vision_ok = bool(state.get("vision_pass", False)) and float(state.get("vision_score", 0.0)) >= 0.7
+    math_ok = bool(state.get("math_pass", True))
+    if vision_ok and math_ok:
         return "pass"
     if int(state.get("refine_attempts", 0)) >= 1:
         return "review_final"
     return "review"
+
 
 
 
@@ -208,6 +249,16 @@ def node_promote_template(state):
     cache = TemplateCache()
     metrics = TemplateMetrics()
 
+    # NEW: If template already active, skip promotion logic entirely
+    # (Avoids confusing "denied" messages)
+    if stage == "active":
+        # If no prior status set, mark explicitly
+        if "promotion_status" not in state:
+            state["promotion_status"] = "already_active"
+        return state
+
+    # --- ORIGINAL LOGIC BELOW ---
+
     # Check metrics
     m = metrics.get(sig) if sig else {}
     success_count = m.get("success_count", 0)
@@ -217,14 +268,14 @@ def node_promote_template(state):
         state["promotion_status"] = f"pending_success_{success_count}"
         return state
 
-    # Now enough successes; ask Cerbos
+    # Enough successes; now enforce Cerbos RBAC
     allowed = can_promote_template(role=role, stage=stage)
 
     if not allowed:
         state["promotion_status"] = "denied"
         return state
 
-    # Promote in cache
+    # Promote in cache (staging --> active)
     promoted = cache.promote(sig)
     if promoted:
         state["template_source"] = "active"

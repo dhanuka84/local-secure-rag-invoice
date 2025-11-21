@@ -5,6 +5,11 @@ class InvoiceState(TypedDict, total=False):
     pdf_path: str
     text: str
     images: List[str]
+    pages: List[Dict[str, Any]]
+    ml_header_fields: Dict[str, Any]
+    ml_line_items: List[Dict[str, Any]]
+    line_item_validation: Dict[str, Any]
+    math_pass: bool
     signature: str
     vendor: str
     template_active: Optional[Dict]

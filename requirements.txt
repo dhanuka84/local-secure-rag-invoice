@@ -1,15 +1,40 @@
-
+# LangGraph + LangChain
 langchain>=0.2.10
 langchain-community>=0.2.10
 langgraph>=0.2.0
 langgraph-checkpoint>=1.0.0
+
+# Vector store + cache
 pymilvus>=2.4.0
 redis>=5.0.0
+
+# Text ranking (Levenshtein / BM25)
 rank-bm25>=0.2.2
+
+# PDF processing
 pdfplumber>=0.11
 pdfminer.six>=20231228
 pdf2image>=1.17.0
-pytesseract>=0.3.10
 Pillow>=10.3.0
+
+# OCR Engines
+pytesseract>=0.3.10
+
+# Layout-aware OCR (DocTR) + Torch backend
+python-doctr[pytorch]>=0.7.0
+torch>=2.1.0
+
+# ML transformers for LayoutLM
+transformers>=4.40.0
+datasets>=2.18.0
+sentencepiece>=0.1.99
+
+# Numeric computation
+pandas>=2.2.0
+numpy>=1.26.0
+
+# RBAC policy engine
 cerbos>=0.7.0
+
+# PDF generation (promotions, export)
 reportlab>=4.0.7
