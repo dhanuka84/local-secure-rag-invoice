@@ -85,7 +85,7 @@ def build_invoice_graph():
     )
 
     # After learning a new template, apply it via extract_fields
-    g.add_edge("doc_vlm_extract_fields", "learn_and_stage")
+    g.add_edge("doc_vlm_extract_fields", "vision_validate")
     g.add_edge("learn_and_stage", "extract_fields")
 
     # ---------- Extraction → vision ----------

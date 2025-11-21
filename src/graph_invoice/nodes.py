@@ -88,8 +88,22 @@ def node_check_cache(state):
         state["template"] = None; state["template_source"] = "none"
     return state
 
-def should_reuse_or_search(state) -> str:
-    return "reuse" if state.get("template") else "search"
+def should_reuse_or_search(state: dict) -> str:
+    """
+    Decide whether to reuse a template or run the search/learn path.
+
+    We ONLY reuse templates that are already ACTIVE.
+    Staging/learned templates still go through the "search" path,
+    which can hit Donut + learning again.
+    """
+    template_source = state.get("template_source")
+
+    if template_source == "active":
+        return "reuse"
+    else:
+        # "staging", "learned", None, etc.
+        return "search"
+
 
 def node_milvus_suggest(state):
     _milvus_connect(); _milvus_ensure()

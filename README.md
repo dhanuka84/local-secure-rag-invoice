@@ -783,6 +783,7 @@ keys \*
 5) "promotions"  
 6) "1"
 
+$ docker exec -it redis redis-cli FLUSHALL
 ---
 
 # **Conclusion — A Modern, Secure, Self-Learning Document AI Pattern**
