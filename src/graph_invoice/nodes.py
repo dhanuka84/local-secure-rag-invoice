@@ -113,7 +113,7 @@ def should_use_suggest_or_learn(state) -> str:
         if t:
             state["template"] = t
             state["template_source"] = "suggested"
-            return "suggested"
+            return "use_suggest" # <-- FIXED: Changed from "suggested" to "use_suggest"
     return "learn"
 
 def node_learn_and_stage(state):

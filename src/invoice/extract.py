@@ -25,8 +25,8 @@ def parse_amount(s: Optional[str]) -> Optional[decimal.Decimal]:
 
 
 def extract_fields(text: str, template: Dict) -> Dict:
-    rx = template.get("regex", {})
-
+    rx = template.get("regex", {}) if template else {}
+    
     data = {
         "invoice_no": _find(rx.get("invoice_no", ""), text),
         "date": _find(rx.get("date", ""), text),
