@@ -1,4 +1,4 @@
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 
 from .state import InvoiceState
 from .nodes import (
@@ -12,7 +12,7 @@ from .nodes import (
     node_milvus_suggest,
     should_use_suggest_or_learn,
     # Template-based extraction
-    node_learn_and_stage,   # currently unused in this graph, safe to keep
+    node_learn_and_stage,
     node_extract_fields,
     # Donut + LayoutLM hybrid extraction
     node_doc_vlm_extract_fields,
@@ -32,7 +32,8 @@ def build_invoice_graph():
 
     High-level flow:
 
-        extract_pdf
+        START
+          -> extract_pdf
           -> ocr_if_needed
           -> signature
           -> check_cache
@@ -41,6 +42,7 @@ def build_invoice_graph():
         If reuse:
             -> extract_fields
             -> vision_validate
+
         If search:
             -> milvus_suggest
                 -> (suggested | learn)
@@ -52,11 +54,13 @@ def build_invoice_graph():
             If learn:
                 -> doc_vlm_extract_fields  (Donut)
                 -> hybrid_extract_fields   (Donut + LayoutLM)
+                -> learn_and_stage         (write regex template to staging)
                 -> vision_validate
 
         vision_validate
-          -> (promote_template | mark_for_review)
+          -> (promote_template | mark_for_review)  [via should_pass_or_review]
           -> done
+          -> END
     """
 
     g = StateGraph(InvoiceState)
@@ -74,6 +78,7 @@ def build_invoice_graph():
 
     # Template-based extraction
     g.add_node("extract_fields", node_extract_fields)
+    g.add_node("learn_and_stage", node_learn_and_stage)
 
     # Donut + LayoutLM hybrid extraction
     g.add_node("doc_vlm_extract_fields", node_doc_vlm_extract_fields)
@@ -89,66 +94,59 @@ def build_invoice_graph():
     # Final
     g.add_node("done", node_done)
 
-    # ---------- Entry & linear spine ----------
+    # ---------- Edges ----------
 
-    g.set_entry_point("extract_pdf")
+    # ENTRYPOINT
+    g.add_edge(START, "extract_pdf")
+
+    # Core linear path
     g.add_edge("extract_pdf", "ocr_if_needed")
     g.add_edge("ocr_if_needed", "signature")
     g.add_edge("signature", "check_cache")
 
-    # ---------- Cache decision: reuse vs search ----------
-
-    # should_reuse_or_search(state) -> "reuse" | "search"
+    # Decide whether to reuse an active template or go to search/learn path
     g.add_conditional_edges(
         "check_cache",
-        should_reuse_or_search,
+        should_reuse_or_search,  # returns "reuse" or "search"
         {
-            # Reuse existing ACTIVE template (fast path)
             "reuse": "extract_fields",
-            # No active template: go via milvus + Donut/LayoutLM
             "search": "milvus_suggest",
         },
     )
 
-    # ---------- Milvus decision: suggested vs learn ----------
-
-    # should_use_suggest_or_learn(state) -> "suggested" | "learn"
+    # From Milvus suggestions: either use a suggested template or learn a new one
     g.add_conditional_edges(
         "milvus_suggest",
-        should_use_suggest_or_learn,
+        should_use_suggest_or_learn,  # returns "suggested" or "learn"
         {
-            # Use suggested template (template-based path)
             "suggested": "extract_fields",
-            # Unknown layout → Donut + LayoutLM hybrid extraction
             "learn": "doc_vlm_extract_fields",
         },
     )
 
-    # Donut → hybrid (ensemble of Donut + LayoutLM)
+    # Learn path: Donut → hybrid → learn regex template → vision validate
     g.add_edge("doc_vlm_extract_fields", "hybrid_extract_fields")
+    g.add_edge("hybrid_extract_fields", "learn_and_stage")
+    g.add_edge("learn_and_stage", "vision_validate")
 
-    # Template path → vision
+    # Reuse/suggest path: regex extraction straight to vision validate
     g.add_edge("extract_fields", "vision_validate")
 
-    # Hybrid path → vision
-    g.add_edge("hybrid_extract_fields", "vision_validate")
-
-    # ---------- Vision / policy decision ----------
-
-    # should_pass_or_review(state) -> "pass" | "review"
+    # After vision validation, decide whether to auto-promote or send to manual review
     g.add_conditional_edges(
         "vision_validate",
-        should_pass_or_review,
+        should_pass_or_review,  # returns "pass" or "review"
         {
             "pass": "promote_template",
             "review": "mark_for_review",
         },
     )
 
-    # ---------- Finalization ----------
-
+    # Both paths converge on "done"
     g.add_edge("promote_template", "done")
     g.add_edge("mark_for_review", "done")
+
+    # End the graph
     g.add_edge("done", END)
 
     return g.compile()
