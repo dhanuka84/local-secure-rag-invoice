@@ -431,7 +431,6 @@ def node_done(state):
 import os
 from src.invoice.template_cache import TemplateCache
 from src.invoice.metrics import TemplateMetrics
-from src.invoice.doc_vlm_extract import extract_with_doc_vlm
 
 DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
 from src.invoice.cerbos_client import can_promote_template
