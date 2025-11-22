@@ -11,15 +11,13 @@ from src.invoice.template_learner import learn_regexes
 from src.invoice.vision_validate import validate_with_vision
 from src.invoice.cerbos_client import can_promote_template
 from src.invoice.metrics import TemplateMetrics
-from src.invoice.doc_vlm_extract import extract_with_doc_vlm
 from src.invoice.layoutlm_extract import extract_with_layoutlm
+from src.invoice.spacy_extract import extract_with_spacy
 
 from langchain_ollama.embeddings import OllamaEmbeddings
 from src.invoice.template_learner import refine_regexes
 from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
 
-
-DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
 
 COLL = "invoice_templates"
 

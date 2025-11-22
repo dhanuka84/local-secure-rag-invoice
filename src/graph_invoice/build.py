@@ -12,10 +12,10 @@ from .nodes import (
     node_milvus_suggest,
     should_use_suggest_or_learn,
     # Template-based extraction
-    node_learn_and_stage,
+    node_learn_and_stage,   # now actually used
     node_extract_fields,
-    # Donut + LayoutLM hybrid extraction
     node_doc_vlm_extract_fields,
+    # LayoutLM hybrid extraction (no Donut)
     node_hybrid_extract_fields,
     # Vision + promotion
     node_vision_validate,
@@ -41,6 +41,7 @@ def build_invoice_graph():
 
         If reuse:
             -> extract_fields
+            -> hybrid_extract_fields
             -> vision_validate
 
         If search:
@@ -49,16 +50,17 @@ def build_invoice_graph():
 
             If suggested:
                 -> extract_fields
+                -> hybrid_extract_fields
                 -> vision_validate
 
             If learn:
-                -> doc_vlm_extract_fields  (Donut)
-                -> hybrid_extract_fields   (Donut + LayoutLM)
-                -> learn_and_stage         (write regex template to staging)
+                -> learn_and_stage       (learn regex template)
+                -> extract_fields
+                -> hybrid_extract_fields
                 -> vision_validate
 
         vision_validate
-          -> (promote_template | mark_for_review)  [via should_pass_or_review]
+          -> (promote_template | mark_for_review)
           -> done
           -> END
     """
@@ -79,9 +81,9 @@ def build_invoice_graph():
     # Template-based extraction
     g.add_node("extract_fields", node_extract_fields)
     g.add_node("learn_and_stage", node_learn_and_stage)
-
-    # Donut + LayoutLM hybrid extraction
     g.add_node("doc_vlm_extract_fields", node_doc_vlm_extract_fields)
+
+    # LayoutLM hybrid extraction (no Donut here)
     g.add_node("hybrid_extract_fields", node_hybrid_extract_fields)
 
     # Vision model
@@ -96,15 +98,13 @@ def build_invoice_graph():
 
     # ---------- Edges ----------
 
-    # ENTRYPOINT
+    # Entry point
     g.add_edge(START, "extract_pdf")
-
-    # Core linear path
     g.add_edge("extract_pdf", "ocr_if_needed")
     g.add_edge("ocr_if_needed", "signature")
     g.add_edge("signature", "check_cache")
 
-    # Decide whether to reuse an active template or go to search/learn path
+    # Reuse vs search
     g.add_conditional_edges(
         "check_cache",
         should_reuse_or_search,  # returns "reuse" or "search"
@@ -114,25 +114,27 @@ def build_invoice_graph():
         },
     )
 
-    # From Milvus suggestions: either use a suggested template or learn a new one
+    # Suggested template vs learn new template
     g.add_conditional_edges(
         "milvus_suggest",
         should_use_suggest_or_learn,  # returns "suggested" or "learn"
         {
             "suggested": "extract_fields",
-            "learn": "doc_vlm_extract_fields",
+            "learn": "learn_and_stage",
         },
     )
 
-    # Learn path: Donut → hybrid → learn regex template → vision validate
+    # Learn path: learn template then extract
+    g.add_edge("learn_and_stage", "extract_fields")
+
+    # After regex extraction, run Donut/doc VLM before LayoutLM hybrid
+    g.add_edge("extract_fields", "doc_vlm_extract_fields")
     g.add_edge("doc_vlm_extract_fields", "hybrid_extract_fields")
-    g.add_edge("hybrid_extract_fields", "learn_and_stage")
-    g.add_edge("learn_and_stage", "vision_validate")
 
-    # Reuse/suggest path: regex extraction straight to vision validate
-    g.add_edge("extract_fields", "vision_validate")
+    # Hybrid → vision
+    g.add_edge("hybrid_extract_fields", "vision_validate")
 
-    # After vision validation, decide whether to auto-promote or send to manual review
+    # Vision → promote vs review
     g.add_conditional_edges(
         "vision_validate",
         should_pass_or_review,  # returns "pass" or "review"
@@ -142,7 +144,7 @@ def build_invoice_graph():
         },
     )
 
-    # Both paths converge on "done"
+    # Both paths converge on done
     g.add_edge("promote_template", "done")
     g.add_edge("mark_for_review", "done")
 

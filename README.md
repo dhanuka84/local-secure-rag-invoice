@@ -806,3 +806,18 @@ It brings together:
 
 The result is a fully air-gapped, intelligent, self-evaluating pipeline for tax calculation and invoice extraction — capable of evolving safely while staying compliant with organizational rules.
 
+# **Troubleshooting**
+
+\`\`\`bash 
+
+$ python - << 'EOF'
+from pathlib import Path
+from src.invoice.pdf_io import pdf_to_text_and_images
+
+text, _ = pdf_to_text_and_images("samples/invoices/godel.pdf")
+print("=== OCR TEXT ===")
+print(text)
+EOF
+
+
+
