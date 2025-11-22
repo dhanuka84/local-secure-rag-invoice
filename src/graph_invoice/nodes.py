@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import re
 from typing import Any, Dict, Optional, List
 
 from src.invoice.pdf_io import pdf_to_text_and_images, ocr_if_needed
@@ -277,21 +278,44 @@ def node_extract_fields(state):
 
 
 
-def node_vision_validate(state):
+def _to_swedish_amount(value) -> str | None:
+    """
+    Convert normalized decimal string/number (e.g. 172.00) back to Swedish
+    '172,00 kr' form for the vision model.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    # if it's numeric-like, replace dot with comma
+    if re.match(r"^-?\d+(\.\d+)?$", s):
+        s = s.replace(".", ",")
+    return f"{s} kr"
+
+
+def node_vision_validate(state: dict) -> dict:
     from src.invoice.vision_validate import validate_with_vision
-    verdict = validate_with_vision(
-        {k: (str(v) if v is not None else None) for k, v in state.get("fields", {}).items()},
-        state.get("images", [])
-    )
+    import re
+
+    fields = state.get("fields", {}) or {}
+    vis_fields = {}
+
+    for k, v in fields.items():
+        if k in ("subtotal", "tax", "total"):
+            vis_fields[k] = _to_swedish_amount(v)
+        else:
+            vis_fields[k] = str(v) if v is not None else None
+
+    verdict = validate_with_vision(vis_fields, state.get("images", []))
+
     state["vision_pass"] = bool(verdict.get("pass"))
     state["vision_score"] = float(verdict.get("score", 0.0))
     state["vision_critique"] = verdict.get("critique", "")
 
-    sig = state.get("signature")
-    if sig and not state["vision_pass"]:
-        TemplateMetrics().record_vision_fail(sig)
+    # Optionally: store what we sent to vision for debugging
+    state["vision_fields_payload"] = vis_fields
 
     return state
+
 
 
 
@@ -404,21 +428,65 @@ def node_promote_template(state):
     return state
 
 
+def _to_swedish_str(value) -> str | None:
+    """
+    Convert '172.00' -> '172,00' for final JSON fields.
+    Does NOT add 'kr'.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    # Only touch simple numeric formats
+    if re.match(r"^-?\d+(\.\d+)?$", s):
+        s = s.replace(".", ",")
+    return s
+
 
 
 def node_done(state: dict) -> dict:
     """
-    Final node. Optionally records success metrics.
+    Final node.
+    - Records success metrics
+    - Converts numeric fields to Swedish comma decimals WITH ' kr'
+    - Converts tax_rate to XX%
     """
+    import re
     sig = state.get("signature")
+    fields = state.get("fields") or {}
+
+    # Success metric
     if sig:
         vpass = state.get("vision_pass", False)
-        fields = state.get("fields") or {}
         if vpass and fields:
             TemplateMetrics().record_success(sig)
 
+    # Convert numeric money fields
+    def _to_swedish_money(value):
+        if value is None:
+            return None
+        s = str(value).strip()
+        if re.match(r"^-?\d+(\.\d+)?$", s):
+            s = s.replace(".", ",")
+        return f"{s} kr"
+
+    for key in ("subtotal", "tax", "total"):
+        if key in fields and fields[key] is not None:
+            fields[key] = _to_swedish_money(fields[key])
+
+    # Convert tax_rate from 0.25 → "25%"
+    if "tax_rate" in fields and fields["tax_rate"] is not None:
+        try:
+            rate = float(str(fields["tax_rate"]).replace(",", "."))
+            fields["tax_rate"] = f"{int(rate * 100)}%"
+        except Exception:
+            fields["tax_rate"] = str(fields["tax_rate"])
+
+    state["fields"] = fields
     state["done"] = True
     return state
+
+
+
 
 
 def node_mark_for_review(state):

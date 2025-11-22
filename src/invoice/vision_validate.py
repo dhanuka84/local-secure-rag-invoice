@@ -22,12 +22,28 @@ def validate_with_vision(answer_fields: Dict, images: List[str]) -> Dict:
     if not images:
         return {"pass": True, "score": 1.0, "critique": "No images to validate."}
 
+    # 1. Prepare Key Metrics for Direct Check
+    subtotal = answer_fields.get("subtotal", "N/A")
+    tax = answer_fields.get("tax", "N/A")
+    total = answer_fields.get("total_amount", "N/A") # Assuming total_amount is the key
+    invoice_date = answer_fields.get("invoice_date", "N/A")
+    
+    # 2. Construct the Detailed Prompt
     prompt = (
-        "You are verifying extracted invoice amounts against images. "
-        "Given the extracted fields in JSON, check if the images show the same "
-        "subtotal, tax, and total. "
-        "Return ONLY JSON with: score (0..1), pass (true/false), critique.\n\n"
-        f"EXTRACTED_JSON:\n{json.dumps(answer_fields)}\n"
+        "You are an expert invoice auditor. Your task is to verify the extracted data "
+        "against the provided invoice image. The invoice is in Swedish (kr). "
+        "Verify the following key amounts and data points by locating them on the image: \n"
+        f"1. **Invoice Total (Totalt belopp)**: MUST match **{total} kr** \n"
+        f"2. **Subtotal (Summa exkl moms)**: MUST match **{subtotal} kr** \n"
+        f"3. **Tax (Moms)**: MUST match **{tax} kr** \n"
+        f"4. **Invoice Date (Fakturadatum)**: MUST match **{invoice_date}** \n\n"
+        
+        "CRITIQUE GUIDELINES:\n"
+        "Critique why the score is NOT 1.0 (e.g., 'Total amount is 172,00 kr in the image, but extracted 172.0 kr').\n"
+        
+        "Return ONLY a single, clean JSON object that strictly adheres to the format:\n"
+        '{"score": float, "pass": bool, "critique": string}\n\n'
+        f"EXTRACTED_JSON for cross-reference:\n{json.dumps(answer_fields, indent=2)}\n"
     )
 
     raw = VLM.invoke(prompt, images=images)
