@@ -14,7 +14,6 @@ from .nodes import (
     # Template-based extraction
     node_learn_and_stage,   # now actually used
     node_extract_fields,
-    node_doc_vlm_extract_fields,
     # LayoutLM hybrid extraction (no Donut)
     node_hybrid_extract_fields,
     # Vision + promotion
@@ -81,7 +80,6 @@ def build_invoice_graph():
     # Template-based extraction
     g.add_node("extract_fields", node_extract_fields)
     g.add_node("learn_and_stage", node_learn_and_stage)
-    g.add_node("doc_vlm_extract_fields", node_doc_vlm_extract_fields)
 
     # LayoutLM hybrid extraction (no Donut here)
     g.add_node("hybrid_extract_fields", node_hybrid_extract_fields)
@@ -127,9 +125,8 @@ def build_invoice_graph():
     # Learn path: learn template then extract
     g.add_edge("learn_and_stage", "extract_fields")
 
-    # After regex extraction, run Donut/doc VLM before LayoutLM hybrid
-    g.add_edge("extract_fields", "doc_vlm_extract_fields")
-    g.add_edge("doc_vlm_extract_fields", "hybrid_extract_fields")
+    # After regex extraction, go directly to LayoutLM hybrid (NO doc_vlm)
+    g.add_edge("extract_fields", "hybrid_extract_fields")
 
     # Hybrid → vision
     g.add_edge("hybrid_extract_fields", "vision_validate")

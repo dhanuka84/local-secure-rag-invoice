@@ -1,4 +1,3 @@
-
 import re
 import decimal
 from typing import Dict, Optional
@@ -32,7 +31,6 @@ def parse_amount(s: Optional[str]) -> Optional[decimal.Decimal]:
         return None
 
 
-
 SWED_INVOICE_NO_RE = re.compile(r"OCR[-/ ]*fakturanummer[:\s]*([0-9]{6,})", re.IGNORECASE)
 SWED_FAKTURADATUM_RE = re.compile(r"Fakturadatum[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2})", re.IGNORECASE)
 SWED_SUBTOTAL_RE = re.compile(r"Summa\s+exkl\s+moms\s+([\d\s]+[,.]\d{2})\s*kr", re.IGNORECASE)
@@ -40,12 +38,7 @@ SWED_TAX_RE = re.compile(r"Moms\s*\(\s*(\d+)\s*%\s*\)\s+([\d\s]+[,.]\d{2})\s*kr"
 SWED_TOTAL_RE = re.compile(r"Totalt\s+belopp\s+([\d\s]+[,.]\d{2})\s*kr", re.IGNORECASE)
 
 
-
 def fallback_extract_swedish_invoice(text: str) -> Dict[str, Optional[str]]:
-    """
-    Heuristic extractor for Swedish invoices like the GodEl example.
-    Returns simple strings (not Decimals) to backfill missing template values.
-    """
     fields: Dict[str, Optional[str]] = {
         "invoice_no": None,
         "date": None,
@@ -55,18 +48,22 @@ def fallback_extract_swedish_invoice(text: str) -> Dict[str, Optional[str]]:
         "tax_rate": None,
     }
 
+    # Invoice No
     m = SWED_INVOICE_NO_RE.search(text)
     if m:
         fields["invoice_no"] = m.group(1).strip()
 
+    # Invoice date
     m = SWED_FAKTURADATUM_RE.search(text)
     if m:
         fields["date"] = m.group(1).strip()
 
+    # Subtotal
     m = SWED_SUBTOTAL_RE.search(text)
     if m:
         fields["subtotal"] = m.group(1).strip()
 
+    # Tax + rate
     m = SWED_TAX_RE.search(text)
     if m:
         rate_str, tax_str = m.group(1).strip(), m.group(2).strip()
@@ -76,11 +73,23 @@ def fallback_extract_swedish_invoice(text: str) -> Dict[str, Optional[str]]:
         except Exception:
             pass
 
+    # 1) Simple "Totalt belopp 172,00 kr"
     m = SWED_TOTAL_RE.search(text)
     if m:
         fields["total"] = m.group(1).strip()
 
+    # 2) Summary block totals row (correct 172,00 kr result)
+    if not fields["total"]:
+        totals_row = re.search(
+            r"\b\d{4}-\d{2}-\d{2}\b\s+[\d\s]+[,.]\d{2}\s*kr\s+[\d\s]+[,.]\d{2}\s*kr\s+[\d\s]+[,.]\d{2}\s*kr\s+([\d\s]+[,.]\d{2})\s*kr",
+            text,
+            re.IGNORECASE,
+        )
+        if totals_row:
+            fields["total"] = totals_row.group(1).strip()
+
     return fields
+
 
 
 def extract_fields(text: str, template: Dict) -> Dict:
@@ -124,5 +133,3 @@ def extract_fields(text: str, template: Dict) -> Dict:
         "tax_rate": str(data["tax_rate"]) if data["tax_rate"] is not None else None,
     }
     return out
-
-
