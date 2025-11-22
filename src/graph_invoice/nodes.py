@@ -1,6 +1,7 @@
 import os
 import json
-
+import math
+from typing import Any, Dict, Optional, List
 
 from src.invoice.pdf_io import pdf_to_text_and_images, ocr_if_needed
 from src.invoice.signature import build_signature
@@ -11,15 +12,131 @@ from src.invoice.vision_validate import validate_with_vision
 from src.invoice.cerbos_client import can_promote_template
 from src.invoice.metrics import TemplateMetrics
 from src.invoice.doc_vlm_extract import extract_with_doc_vlm
+from src.invoice.layoutlm_extract import extract_with_layoutlm
 
-DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
-from src.invoice.template_learner import refine_regexes
-
-from typing import List
 from langchain_ollama.embeddings import OllamaEmbeddings
+from src.invoice.template_learner import refine_regexes
 from pymilvus import connections, utility, FieldSchema, CollectionSchema, DataType, Collection
 
+
+DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
+
 COLL = "invoice_templates"
+
+def _normalize_number(value: str | None) -> float | None:
+    if not value:
+        return None
+    import re
+    cleaned = re.sub(r"[^0-9.,-]", "", value)
+    if not cleaned:
+        return None
+    cleaned = cleaned.replace(",", ".")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def node_hybrid_extract_fields(state: dict) -> dict:
+    """
+    Combine Donut (doc_vlm) + LayoutLMv3 extraction and compute a validation score.
+    Assumes doc_vlm already ran and filled state["fields"] and/or state["ml_line_items"].
+    """
+    pdf_path = state.get("pdf_path") or state.get("pdf")
+
+    doc_fields = state.get("fields") or {}
+    doc_items = state.get("ml_line_items") or []
+
+    lm_result = extract_with_layoutlm(pdf_path)
+    lm_fields = lm_result.get("fields") or {}
+    lm_items = lm_result.get("line_items") or []
+
+    # --- Merge fields (simple voting/priority rule) ---
+    merged = dict(doc_fields)  # start from Donut
+
+    def choose(key: str) -> str | None:
+        a = (doc_fields or {}).get(key)
+        b = (lm_fields or {}).get(key)
+        # Prefer exact agreement
+        if a and b and str(a) == str(b):
+            return a
+        # Otherwise prefer LayoutLM for invoice_no/date,
+        # and Donut for totals (tune as you wish)
+        if key in ("invoice_no", "date"):
+            return b or a
+        if key in ("total", "subtotal", "tax", "tax_rate"):
+            return a or b
+        return a or b
+
+    for key in ["invoice_no", "date", "subtotal", "tax", "total", "tax_rate"]:
+        merged[key] = choose(key)
+
+    # --- Numeric validation: subtotal + tax ≈ total ---
+    total = _normalize_number(merged.get("total"))
+    subtotal = _normalize_number(merged.get("subtotal"))
+    tax = _normalize_number(merged.get("tax"))
+
+    math_ok = None
+    if subtotal is not None and tax is not None and total is not None:
+        if abs((subtotal + tax) - total) <= 0.01 * max(total, 1.0):
+            math_ok = True
+        else:
+            math_ok = False
+
+    # --- Agreement checks between models ---
+    agree_total = None
+    if doc_fields.get("total") and lm_fields.get("total"):
+        agree_total = (
+            _normalize_number(doc_fields["total"]) ==
+            _normalize_number(lm_fields["total"])
+        )
+
+    agree_date = None
+    if doc_fields.get("date") and lm_fields.get("date"):
+        agree_date = (str(doc_fields["date"]) == str(lm_fields["date"]))
+
+    agree_invoice = None
+    if doc_fields.get("invoice_no") and lm_fields.get("invoice_no"):
+        agree_invoice = (str(doc_fields["invoice_no"]) == str(lm_fields["invoice_no"]))
+
+    # --- Build an ML validation score [0,1] ---
+    score = 0.0
+    components = 0
+
+    if agree_total is not None:
+        components += 1
+        if agree_total:
+            score += 0.3
+
+    if agree_date is not None:
+        components += 1
+        if agree_date:
+            score += 0.2
+
+    if agree_invoice is not None:
+        components += 1
+        if agree_invoice:
+            score += 0.2
+
+    if math_ok is not None:
+        components += 1
+        if math_ok:
+            score += 0.3
+
+    if components > 0:
+        score = min(1.0, score)  # already normalized by weights
+    else:
+        score = 0.0
+
+    # --- Write back to state ---
+    state["fields"] = merged
+    # Combine line items (just concatenate for now)
+    state["ml_line_items"] = (doc_items or []) + (lm_items or [])
+    state["layoutlm_raw"] = lm_result.get("raw_tokens")
+    state["ml_validation_score"] = score
+
+    return state
+
 
 def _milvus_connect():
     connections.connect("default", host="localhost", port="19530")
@@ -180,22 +297,20 @@ def node_vision_validate(state):
 
 
 
-def should_pass_or_review(state) -> str:
-    if state.get("vision_pass", False) and float(state.get("vision_score", 0.0)) >= 0.7:
+def should_pass_or_review(state: dict) -> str:
+    vision_score = state.get("vision_score") or 0.0
+    ml_score = state.get("ml_validation_score") or 0.0
+
+    # Simple ensemble: average
+    combined = 0.5 * vision_score + 0.5 * ml_score
+    state["combined_validation_score"] = combined
+
+    if combined >= 0.7:
+        state["vision_pass"] = True
         return "pass"
-    if int(state.get("refine_attempts", 0)) >= 1:
-        return "review_final"
-    return "review"
-
-
-
-import os
-from src.invoice.template_cache import TemplateCache
-from src.invoice.metrics import TemplateMetrics
-from src.invoice.doc_vlm_extract import extract_with_doc_vlm
-
-DOCVLM_DEBUG = os.getenv('DOCVLM_DEBUG', 'false').lower() == 'true'
-from src.invoice.cerbos_client import can_promote_template
+    else:
+        state["vision_pass"] = False
+        return "review"
 
 def node_done(state):
     """
@@ -264,9 +379,20 @@ def node_promote_template(state):
 
 
 
-def node_done(state):
+def node_done(state: dict) -> dict:
+    """
+    Final node. Optionally records success metrics.
+    """
+    sig = state.get("signature")
+    if sig:
+        vpass = state.get("vision_pass", False)
+        fields = state.get("fields") or {}
+        if vpass and fields:
+            TemplateMetrics().record_success(sig)
+
     state["done"] = True
     return state
+
 
 def node_mark_for_review(state):
     state["done"] = False

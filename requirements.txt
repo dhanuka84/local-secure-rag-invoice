@@ -40,3 +40,4 @@ cerbos>=0.7.0
 reportlab>=4.0.7
 
 poppler-utils
+tesseract>=4.1.1

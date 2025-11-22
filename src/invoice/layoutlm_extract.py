@@ -187,3 +187,126 @@ def extract_with_layoutlm(pages: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {"header": {}, "line_items": []}
     header, line_items = _extract_fields_and_line_items(tokens, labels)
     return {"header": header, "line_items": line_items}
+
+import os
+from typing import Any, Dict, List, Tuple
+
+from PIL import Image
+from pdf2image import convert_from_path
+import torch
+from transformers import LayoutLMv3Processor, AutoModelForTokenClassification
+
+MODEL_ID = os.getenv("LAYOUTLM_MODEL_ID", "microsoft/layoutlmv3-base")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _pdf_to_first_page_image(pdf_path: str) -> Image.Image:
+    pages = convert_from_path(pdf_path)
+    if not pages:
+        raise ValueError(f"No pages found in PDF: {pdf_path}")
+    return pages[0].convert("RGB")
+
+
+_processor: LayoutLMv3Processor | None = None
+_model: AutoModelForTokenClassification | None = None
+
+
+def _load_layoutlm() -> Tuple[LayoutLMv3Processor, AutoModelForTokenClassification]:
+    global _processor, _model
+    if _processor is None or _model is None:
+        _processor = LayoutLMv3Processor.from_pretrained(MODEL_ID)
+        _model = AutoModelForTokenClassification.from_pretrained(MODEL_ID)
+        _model.to(DEVICE)
+        _model.eval()
+    return _processor, _model
+
+
+def extract_with_layoutlm(pdf_path: str) -> Dict[str, Any]:
+    """
+    Run LayoutLMv3 on the first page and return:
+      - fields: {invoice_no, date, subtotal, tax, total, tax_rate}
+      - line_items: list of rows (best-effort)
+      - raw_tokens: tokens + labels for debugging
+    """
+    processor, model = _load_layoutlm()
+    image = _pdf_to_first_page_image(pdf_path)
+
+    encoding = processor(
+        image,
+        return_tensors="pt",
+        truncation=True,
+        padding="max_length",
+        max_length=512,
+    )
+    encoding = {k: v.to(DEVICE) for k, v in encoding.items()}
+
+    with torch.no_grad():
+        outputs = model(**encoding)
+        logits = outputs.logits  # [batch, seq_len, num_labels]
+        predictions = logits.argmax(-1)[0].cpu().tolist()
+
+    tokens = processor.tokenizer.convert_ids_to_tokens(encoding["input_ids"][0])
+    labels = [model.config.id2label[p] for p in predictions]
+
+    fields, line_items = _tokens_to_fields(tokens, labels)
+
+    raw_tokens = [
+        {"token": t, "label": l} for t, l in zip(tokens, labels)
+    ]
+
+    return {
+        "fields": fields,
+        "line_items": line_items,
+        "raw_tokens": raw_tokens,
+    }
+
+
+def _tokens_to_fields(tokens: List[str], labels: List[str]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """
+    Very simple heuristic mapping from token labels to invoice fields.
+    Assumes labels like B-INVOICE_NO, I-INVOICE_NO, B-TOTAL, etc.
+    Adjust to match your fine-tuned head.
+    """
+    fields = {
+        "invoice_no": None,
+        "date": None,
+        "subtotal": None,
+        "tax": None,
+        "total": None,
+        "tax_rate": None,
+    }
+
+    buffers = {
+        "INVOICE_NO": [],
+        "DATE": [],
+        "SUBTOTAL": [],
+        "TAX": [],
+        "TOTAL": [],
+        "TAX_RATE": [],
+    }
+
+    for tok, lab in zip(tokens, labels):
+        if lab.startswith("B-") or lab.startswith("I-"):
+            key = lab.split("-", 1)[1]
+            if key in buffers:
+                clean_tok = tok.replace("##", "")
+                buffers[key].append(clean_tok)
+
+    def _join(buf: List[str]) -> str | None:
+        if not buf:
+            return None
+        return "".join(buf)
+
+    fields["invoice_no"] = _join(buffers["INVOICE_NO"])
+    fields["date"] = _join(buffers["DATE"])
+    fields["subtotal"] = _join(buffers["SUBTOTAL"])
+    fields["tax"] = _join(buffers["TAX"])
+    fields["total"] = _join(buffers["TOTAL"])
+    fields["tax_rate"] = _join(buffers["TAX_RATE"])
+
+    # Line items are non-trivial without a table head;
+    # for now we return an empty list or add logic later.
+    line_items: List[Dict[str, Any]] = []
+
+    return fields, line_items
+
