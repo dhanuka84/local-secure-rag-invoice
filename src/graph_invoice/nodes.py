@@ -448,7 +448,8 @@ def node_done(state: dict) -> dict:
     Final node.
     - Records success metrics
     - Converts numeric fields to Swedish comma decimals WITH ' kr'
-    - Converts tax_rate to XX%
+    - Converts tax_rate to '25%'
+    - Renames output fields to Swedish labels
     """
     import re
     sig = state.get("signature")
@@ -469,11 +470,15 @@ def node_done(state: dict) -> dict:
             s = s.replace(".", ",")
         return f"{s} kr"
 
-    for key in ("subtotal", "tax", "total"):
-        if key in fields and fields[key] is not None:
-            fields[key] = _to_swedish_money(fields[key])
+    # Internal → Swedish formatting
+    if fields.get("subtotal") is not None:
+        fields["subtotal"] = _to_swedish_money(fields["subtotal"])
+    if fields.get("tax") is not None:
+        fields["tax"] = _to_swedish_money(fields["tax"])
+    if fields.get("total") is not None:
+        fields["total"] = _to_swedish_money(fields["total"])
 
-    # Convert tax_rate from 0.25 → "25%"
+    # Tax rate: convert 0.25 → "25%"
     if "tax_rate" in fields and fields["tax_rate"] is not None:
         try:
             rate = float(str(fields["tax_rate"]).replace(",", "."))
@@ -481,12 +486,25 @@ def node_done(state: dict) -> dict:
         except Exception:
             fields["tax_rate"] = str(fields["tax_rate"])
 
-    state["fields"] = fields
+    # Map English → Swedish keys
+    swedish = {
+        "invoice_no": "OCR-/fakturanummer",
+        "date": "Fakturadatum",
+        "subtotal": "Summa exkl moms",
+        "tax": "Moms",
+        "total": "Totalt belopp",
+        "tax_rate": "Moms (%)"
+    }
+
+    swedish_fields = {}
+    for eng_key, swe_key in swedish.items():
+        if eng_key in fields:
+            swedish_fields[swe_key] = fields[eng_key]
+
+    # Replace state fields with Swedish keys
+    state["fields"] = swedish_fields
     state["done"] = True
     return state
-
-
-
 
 
 def node_mark_for_review(state):
