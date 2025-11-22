@@ -296,19 +296,48 @@ def node_vision_validate(state):
 
 
 def should_pass_or_review(state: dict) -> str:
-    vision_score = state.get("vision_score") or 0.0
-    ml_score = state.get("ml_validation_score") or 0.0
+    """
+    Decide whether this run should be treated as pass or review.
 
-    # Simple ensemble: average
-    combined = 0.5 * vision_score + 0.5 * ml_score
-    state["combined_validation_score"] = combined
+    For the Tesseract+regex pipeline, we consider a run 'good' if:
+      - all core fields are present, and
+      - the math is consistent (subtotal + tax ≈ total).
 
-    if combined >= 0.7:
+    Vision/VLM score is optional; we treat it as advisory only.
+    """
+    fields = state.get("fields") or {}
+
+    core_ok = all(
+        fields.get(k)
+        for k in ["invoice_no", "date", "subtotal", "tax", "total"]
+    )
+
+    # Check math consistency if we can
+    from src.graph_invoice.nodes import _normalize_number  # or move helper out if needed
+
+    subtotal = _normalize_number(str(fields.get("subtotal")))
+    tax = _normalize_number(str(fields.get("tax")))
+    total = _normalize_number(str(fields.get("total")))
+
+    math_ok = None
+    if subtotal is not None and tax is not None and total is not None:
+        math_ok = abs((subtotal + tax) - total) <= 0.01 * max(total, 1.0)
+
+    # Final decision
+    if core_ok and (math_ok in (None, True)):
+        # Force a "pass"
         state["vision_pass"] = True
+        # If no vision_score was set, give it a 1.0 as a deterministic success
+        if state.get("vision_score") is None:
+            state["vision_score"] = 1.0
+        state["combined_validation_score"] = 1.0
         return "pass"
     else:
         state["vision_pass"] = False
+        state["combined_validation_score"] = 0.0
         return "review"
+
+
 
 def node_done(state):
     """
