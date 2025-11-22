@@ -439,7 +439,7 @@ from src.invoice.cerbos_client import can_promote_template
 AUTO_PROMOTE_THRESHOLD = int(os.getenv("AUTO_PROMOTE_THRESHOLD", "3"))
 
 
-def node_promote_template(state):
+def node_promote_template(state: dict) -> dict:
     sig = state.get("signature")
     stage = state.get("template_source", "staging")
     role = state.get("role") or os.getenv("APP_ROLE", "employee")
@@ -447,35 +447,33 @@ def node_promote_template(state):
     cache = TemplateCache()
     metrics = TemplateMetrics()
 
-    # Get metrics for this signature
-    m = metrics.get(sig) if sig else {}  # may contain strings
+    # 🔹 1) If already active, do NOT try to promote again
+    if stage == "active":
+        # Keep previous status if it was "promoted", otherwise mark as already_active
+        state.setdefault("promotion_status", "already_active")
+        return state
 
-    # --- Normalize success_count and threshold to int ---
+    # 🔹 2) Read and normalize success_count
+    m = metrics.get(sig) if sig else {}
     raw_success = m.get("success_count", 0)
-
     try:
         success_count = int(raw_success)
     except (TypeError, ValueError):
         success_count = 0
 
-    try:
-        threshold = int(AUTO_PROMOTE_THRESHOLD)
-    except (TypeError, ValueError):
-        threshold = 3
-
-    # Not enough successful runs; force manual review path
+    # 🔹 3) Respect AUTO_PROMOTE_THRESHOLD for non-active templates
+    threshold = AUTO_PROMOTE_THRESHOLD
     if success_count < threshold:
         state["promotion_status"] = f"pending_success_{success_count}"
         return state
 
-    # Now enough successes; ask Cerbos
+    # 🔹 4) Ask Cerbos if this role may promote this stage
     allowed = can_promote_template(role=role, stage=stage)
-
     if not allowed:
         state["promotion_status"] = "denied"
         return state
 
-    # Promote in cache
+    # 🔹 5) Promote in cache
     promoted = cache.promote(sig)
     if promoted:
         state["template_source"] = "active"
