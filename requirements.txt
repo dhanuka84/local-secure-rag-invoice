@@ -34,13 +34,16 @@ pandas>=2.2.0
 numpy>=1.26.0
 
 # RBAC policy engine
-cerbos>=0.7.0
+cerbos==0.14.*
 
 # PDF generation (promotions, export)
 reportlab>=4.0.7
 
-poppler-utils
-tesseract>=4.1.1
-tesseract-ocr
-tesseract-ocr-swe
 sv-core-news-lg==3.8.0
+
+#sudo apt update
+#sudo apt install tesseract-ocr tesseract-ocr-swe libleptonica-dev libtesseract-dev
+#sudo apt install poppler-utils
+#pip install spacy
+#python -m spacy download sv_core_news_lg
+

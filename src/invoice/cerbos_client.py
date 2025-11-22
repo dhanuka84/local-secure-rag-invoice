@@ -1,6 +1,11 @@
 import os
 from cerbos.sdk.client import CerbosClient
-from cerbos.sdk.model import Principal, Resource
+from cerbos.sdk.model import (
+    Principal,
+    Resource,
+    ResourceAction,
+    ResourceList,
+)
 
 CERBOS_HOST = os.getenv("CERBOS_HOST", "http://localhost:3592")
 CERBOS_STRICT = os.getenv("CERBOS_STRICT", "false").lower() == "true"
@@ -10,44 +15,55 @@ _client = CerbosClient(host=CERBOS_HOST)
 
 def can_promote_template(role: str, stage: str) -> bool:
     """
-    Ask Cerbos: can this role promote a template in this stage?
-
-    Matches policy:
-      resource: "template"
-      action:  "promote"
-      attr:    { "stage": <stage> }
+    Ask Cerbos if this role can promote an invoice template in the given stage.
+    Uses CerbosClient.check_resources() exactly as required by your client code.
     """
+
+    # Principal (roles must be a SET)
     principal = Principal(
         id="user",
-        roles=[role],           # must be ["manager"] or ["employee"]
+        roles={role},
+        attr={"role": role},
     )
 
+    # Resource (attr MUST be used, not attributes)
+    resource_id = f"invoice_template_{stage}"
     resource = Resource(
-        id="invoice_template",  # arbitrary ID, not used in the policy
-        kind="template",        # MUST match resource: "template" in YAML
-        attr={"stage": stage},  # MUST match condition on request.resource.attr.stage
+        id=resource_id,
+        kind="template",
+        attr={"stage": stage},
+    )
+
+    # Wrap resource inside ResourceAction → inside ResourceList
+    res_list = ResourceList(
+        resources=[
+            ResourceAction(
+                resource=resource,
+                actions={"promote"},
+            )
+        ]
     )
 
     try:
-        decision = _client.check_resource(
+        # Correct call to client
+        resp = _client.check_resources(
             principal=principal,
-            resource=resource,
-            actions={"promote"},
+            resources=res_list,
         )
 
-        # Newer SDK: decision.is_allowed("promote")
-        if hasattr(decision, "is_allowed") and callable(decision.is_allowed):
-            return decision.is_allowed("promote")
+        # If no results → deny (or allow if not strict)
+        if not resp or not resp.results:
+            return False if CERBOS_STRICT else True
 
-        # Fallback: look at decision.actions dict
-        actions = getattr(decision, "actions", None)
-        if isinstance(actions, dict):
-            return bool(actions.get("promote"))
+        # Find our result
+        result = resp.get_resource(resource_id)
+        if not result:
+            return False if CERBOS_STRICT else True
 
-        # If we couldn't interpret the decision, be strict or permissive
-        return False if CERBOS_STRICT else True
+        # Check allow/deny
+        return result.is_allowed("promote")
 
     except Exception as e:
         print(f"[CERBOS] Error while checking promote: {e}")
-        # In dev, you can choose to allow on failure
+        # Allow fallback if not strict
         return False if CERBOS_STRICT else True

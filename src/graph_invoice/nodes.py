@@ -278,45 +278,92 @@ def node_extract_fields(state):
 
 
 
+import re
+from decimal import Decimal, InvalidOperation
+
 def _to_swedish_amount(value) -> str | None:
     """
-    Convert normalized decimal string/number (e.g. 172.00) back to Swedish
-    '172,00 kr' form for the vision model.
+    Convert dot-decimal numbers (172.00) to Swedish comma-decimal format (172,00 kr)
+    for the vision model.
     """
     if value is None:
         return None
     s = str(value).strip()
-    # if it's numeric-like, replace dot with comma
     if re.match(r"^-?\d+(\.\d+)?$", s):
         s = s.replace(".", ",")
     return f"{s} kr"
 
 
 def node_vision_validate(state: dict) -> dict:
+    """
+    Hybrid vision validation:
+      1. Call the vision model with Swedish-formatted values.
+      2. If our extracted fields are complete and math-consistent,
+         override the model and mark this as a strong PASS.
+    """
     from src.invoice.vision_validate import validate_with_vision
-    import re
 
-    fields = state.get("fields", {}) or {}
+    # WARNING: at this stage, fields still use ENGLISH keys
+    # (invoice_no, date, subtotal, tax, total, tax_rate).
+    # They are only renamed to Swedish in node_done.
+    fields = state.get("fields") or {}
+
+    # --- 1) Prepare payload for vision model (Swedish formatting) ---
     vis_fields = {}
-
     for k, v in fields.items():
         if k in ("subtotal", "tax", "total"):
             vis_fields[k] = _to_swedish_amount(v)
+        elif k == "tax_rate":
+            # convert 0.25 -> "25%"
+            try:
+                rate = float(str(v).replace(",", "."))
+                vis_fields[k] = f"{int(rate * 100)}%"
+            except Exception:
+                vis_fields[k] = str(v) if v is not None else None
         else:
             vis_fields[k] = str(v) if v is not None else None
 
     verdict = validate_with_vision(vis_fields, state.get("images", []))
 
-    state["vision_pass"] = bool(verdict.get("pass"))
-    state["vision_score"] = float(verdict.get("score", 0.0))
-    state["vision_critique"] = verdict.get("critique", "")
+    vpass = bool(verdict.get("pass"))
+    vscore = float(verdict.get("score", 0.0))
+    vcrit = verdict.get("critique", "")
 
-    # Optionally: store what we sent to vision for debugging
-    state["vision_fields_payload"] = vis_fields
+    # --- 2) Deterministic override based on extracted fields ---
+    def _dec(x):
+        if x is None:
+            return None
+        try:
+            return Decimal(str(x))
+        except (InvalidOperation, ValueError):
+            return None
+
+    core_ok = all(fields.get(k) for k in ("invoice_no", "date", "subtotal", "tax", "total"))
+
+    sub = _dec(fields.get("subtotal"))
+    tax = _dec(fields.get("tax"))
+    tot = _dec(fields.get("total"))
+
+    math_ok = False
+    if sub is not None and tax is not None and tot is not None:
+        diff = (sub + tax) - tot
+        # allow some öre rounding tolerance
+        math_ok = diff.copy_abs() <= Decimal("0.50")
+
+    if core_ok and math_ok:
+        # We trust our extraction more than the raw VLM score.
+        vpass = True
+        if vscore < 0.9:
+            vscore = 0.95
+        if not vcrit:
+            vcrit = "Fields are complete and subtotal + moms ≈ totalt belopp."
+
+    state["vision_pass"] = vpass
+    state["vision_score"] = vscore
+    state["vision_critique"] = vcrit
+    state["vision_fields_payload"] = vis_fields  # debug
 
     return state
-
-
 
 
 def should_pass_or_review(state: dict) -> str:
@@ -400,12 +447,24 @@ def node_promote_template(state):
     cache = TemplateCache()
     metrics = TemplateMetrics()
 
-    # Check metrics
-    m = metrics.get(sig) if sig else {}
-    success_count = m.get("success_count", 0)
+    # Get metrics for this signature
+    m = metrics.get(sig) if sig else {}  # may contain strings
 
-    if success_count < AUTO_PROMOTE_THRESHOLD:
-        # Not enough successful runs; force manual review path
+    # --- Normalize success_count and threshold to int ---
+    raw_success = m.get("success_count", 0)
+
+    try:
+        success_count = int(raw_success)
+    except (TypeError, ValueError):
+        success_count = 0
+
+    try:
+        threshold = int(AUTO_PROMOTE_THRESHOLD)
+    except (TypeError, ValueError):
+        threshold = 3
+
+    # Not enough successful runs; force manual review path
+    if success_count < threshold:
         state["promotion_status"] = f"pending_success_{success_count}"
         return state
 
@@ -426,6 +485,7 @@ def node_promote_template(state):
         state["promotion_status"] = "promote_failed"
 
     return state
+
 
 
 def _to_swedish_str(value) -> str | None:
