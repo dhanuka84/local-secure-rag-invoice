@@ -1,0 +1,156 @@
+diff --git a/src/invoice/extract.py b/src/invoice/extract.py
+index 20a500d..3cc1dc3 100644
+--- a/src/invoice/extract.py
++++ b/src/invoice/extract.py
+@@ -93,6 +93,10 @@ def fallback_extract_swedish_invoice(text: str) -> Dict[str, Optional[str]]:
+ 
+ 
+ def extract_fields(text: str, template: Dict) -> Dict:
++    # --- Ensure template is dict-like ---
++    if not isinstance(template, dict):
++        template = {}
++
+     rx = template.get("regex", {})
+ 
+     data = {
+@@ -106,7 +110,14 @@ def extract_fields(text: str, template: Dict) -> Dict:
+ 
+     # … math consistency & tax_rate calculation (if you want template-based logic here) …
+ 
+-    fallback = fallback_extract_swedish_invoice(text)
++    # ===========================
++    # Choose correct fallback extractor
++    # ===========================
++    if looks_like_taby_invoice(text):
++        fallback = fallback_extract_taby_invoice(text)
++    else:
++        fallback = fallback_extract_swedish_invoice(text)
++
+ 
+     if data["invoice_no"] is None and fallback.get("invoice_no"):
+         data["invoice_no"] = fallback["invoice_no"]
+@@ -133,3 +144,124 @@ def extract_fields(text: str, template: Dict) -> Dict:
+         "tax_rate": str(data["tax_rate"]) if data["tax_rate"] is not None else None,
+     }
+     return out
++
++import re
++import decimal
++from typing import Dict, Optional
++
++###########################################################
++# 0. Helper Functions (same as before)
++###########################################################
++
++def _safe_amount(value: Optional[str]) -> Optional[str]:
++    """Normalize decimal + append ' kr'."""
++    if not value:
++        return None
++    cleaned = value.replace(" ", "").replace(",", ".")
++    try:
++        amount = decimal.Decimal(cleaned)
++        # format back into Swedish (comma decimal)
++        s = str(amount)
++        if "." in s:
++            whole, dec = s.split(".")
++            return f"{whole},{dec.zfill(2)} kr"
++        else:
++            return f"{s},00 kr"
++    except:
++        return None
++
++
++###########################################################
++# 1. Detect Täby-style invoices
++###########################################################
++
++def looks_like_taby_invoice(text: str) -> bool:
++    """
++    Täby invoices contain very reliable identifiers:
++    - 'TÄBY KOMMUN'
++    - 'Att betala i SEK'
++    - 'Fakturanr'
++    """
++    t = text.upper()
++    return (
++        "TÄBY KOMMUN" in t
++        or "ATT BETALA I SEK" in t
++        or "FAKTURANR" in t
++    )
++
++
++###########################################################
++# 2. Täby Invoice Extractor
++###########################################################
++
++TABY_DATE_RE = re.compile(r"\bDatum\s+([0-9]{4}-[0-9]{2}-[0-9]{2})", re.IGNORECASE)
++TABY_INVOICE_NO_RE = re.compile(r"Fakturanr[:\s]*([0-9]{6,})", re.IGNORECASE)
++TABY_OCR_RE = re.compile(r"OCR[- ]*refnr[:\s]*([0-9]{6,})", re.IGNORECASE)
++
++TABY_TOTAL_RE = re.compile(
++    r"Att\s+betala\s+i\s+SEK[:\s]*([0-9]+[.,]\d{2})",
++    re.IGNORECASE
++)
++
++TABY_MOMS_RE = re.compile(
++    r"\bMoms\s+([0-9]+[.,]\d{2})",
++    re.IGNORECASE
++)
++
++# subtotal sometimes appears only inside the % moms breakdown
++TABY_SUBTOTAL_RE = re.compile(
++    r"0%\s+([0-9]+[.,]\d{2})",
++    re.IGNORECASE
++)
++
++
++def fallback_extract_taby_invoice(text: str) -> Dict[str, Optional[str]]:
++    fields = {
++        "OCR-/fakturanummer": None,
++        "Fakturadatum": None,
++        "Summa exkl moms": None,
++        "Moms": None,
++        "Totalt belopp": None,
++        "Moms (%)": None,
++    }
++
++    # --- Date ---
++    m = TABY_DATE_RE.search(text)
++    if m:
++        fields["Fakturadatum"] = m.group(1)
++
++    # --- Invoice number (OCR priority) ---
++    m = TABY_OCR_RE.search(text)
++    if m:
++        fields["OCR-/fakturanummer"] = m.group(1)
++    else:
++        m = TABY_INVOICE_NO_RE.search(text)
++        if m:
++            fields["OCR-/fakturanummer"] = m.group(1)
++
++    # --- Total ---
++    m = TABY_TOTAL_RE.search(text)
++    if m:
++        fields["Totalt belopp"] = _safe_amount(m.group(1))
++
++    # --- Moms ---
++    m = TABY_MOMS_RE.search(text)
++    if m:
++        fields["Moms"] = _safe_amount(m.group(1))
++
++    # --- Subtotal (from 0% line if present) ---
++    m = TABY_SUBTOTAL_RE.search(text)
++    if m:
++        fields["Summa exkl moms"] = _safe_amount(m.group(1))
++
++    # --- Moms (%) ---
++    # Täby invoices show several %, but base rate is almost always 25%
++    if "25.00% moms" in text:
++        fields["Moms (%)"] = "25%"
++    elif "12.00%" in text:
++        fields["Moms (%)"] = "12%"
++    elif "6.00%" in text:
++        fields["Moms (%)"] = "6%"
++
++    return fields
++

@@ -174,10 +174,33 @@ def _milvus_suggest(signature: str, vendor: str, top_k: int = 3) -> List[str]:
         out.append(hit.entity.get("signature"))
     return out
 
+
 def node_extract_pdf(state):
-    text, images = pdf_to_text_and_images(state["pdf_path"])
-    state["text"], state["images"] = text, images
+    # Prefer explicit pdf_path, but also support pdf
+    pdf_path = None
+
+    if isinstance(state, dict):
+        pdf_path = state.get("pdf_path") or state.get("pdf")
+    else:
+        # If LangGraph wraps state in a custom object
+        pdf_path = getattr(state, "pdf_path", None) or getattr(state, "pdf", None)
+
+    if not pdf_path:
+        raise ValueError(
+            f"node_extract_pdf: missing pdf in state. Got keys/attrs: {state}"
+        )
+
+    text, images = pdf_to_text_and_images(pdf_path)
+
+    # Write back into state (LangGraph will merge dict-style updates)
+    state["text"] = text
+    state["images"] = images
+    state["pdf_path"] = pdf_path
+
     return state
+
+
+
 
 def node_ocr_if_needed(state):
     state["text"] = ocr_if_needed(state["text"], state.get("images", []))

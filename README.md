@@ -820,4 +820,23 @@ print(text)
 EOF
 
 
+{
+  "pdf": "/home/dhanuka84/Downloads/taby_kummun.pdf",
+  "signature": "faktura_sida_2469a45f",
+  "template_source": "none",
+  "promotion_status": null,
+  "fields": {
+    "OCR-/fakturanummer": "20122030115",
+    "Fakturadatum": "2025-10-09",
+    "Summa exkl moms": "0,00 kr",
+    "Moms": "0,00 kr",
+    "Totalt belopp": "1189,00 kr",
+    "Moms (%)": "25%"
+  },
+  "vision_pass": false,
+  "vision_score": 0.0,
+  "vision_critique": "Invoice Total (Totalt belopp) must be N/A kr but extracted as 1189,00 kr. Subtotal (Summa exkl moms) must be 0,00 kr but extracted as 0,00 kr while the invoice shows 1188.80 kr as the subtotal. Invoice Date (Fakturadatum) must be N/A but extracted as 2025-10-09.",
+  "done": true
+}
+
 
