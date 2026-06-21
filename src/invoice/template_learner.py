@@ -1,8 +1,16 @@
 
 import json
-from langchain_ollama import OllamaLLM
+from src.invoice.ollama_runtime import TEXT_MODEL, get_ollama_llm
 
-LLM = OllamaLLM(model="llama3.2")
+LLM = None
+
+DEFAULT_REGEX = {
+    "invoice_no": r"(?i)invoice\s*(?:no|#)\s*[:\-]?\s*([A-Za-z0-9\-]+)",
+    "date": r"(?i)date\s*[:\-]?\s*(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})",
+    "subtotal": r"(?i)subtotal\s*[:\-]?\s*\$?([0-9,]+\.?\d{0,2})",
+    "tax": r"(?i)tax(?:\s*(?:rate|amount))?\s*[:\-]?\s*\$?([0-9,]+\.?\d{0,2})",
+    "total": r"(?i)total\s*[:\-]?\s*\$?([0-9,]+\.?\d{0,2})",
+}
 
 PROMPT = """You are a senior parsing engineer.
 Given this invoice text, propose JSON with robust regex patterns to extract fields:
@@ -19,23 +27,29 @@ INVOICE_TEXT:
 
 def learn_regexes(invoice_text: str) -> dict:
     sample = invoice_text[:4000]
-    raw = LLM.invoke(PROMPT.format(invoice_text=sample))
+    raw = None
+    backend = "fallback_regex"
     try:
-        data = json.loads(raw)
+        global LLM
+        if LLM is None:
+            LLM = get_ollama_llm(TEXT_MODEL)
+        raw = LLM.invoke(PROMPT.format(invoice_text=sample))
+        backend = "ollama"
+    except Exception as exc:
+        print(f"[template_learner] Ollama unavailable for template learning; using built-in fallback regexes. {exc}")
+    try:
+        data = json.loads(raw) if raw else {}
         regex = data.get("regex", data)
     except Exception:
-        regex = {
-            "invoice_no": r"(?i)invoice\s*(?:no|#)\s*[:\-]?\s*([A-Za-z0-9\-]+)",
-            "date": r"(?i)date\s*[:\-]?\s*(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})",
-            "subtotal": r"(?i)subtotal\s*[:\-]?\s*\$?([0-9,]+\.?\d{0,2})",
-            "tax": r"(?i)tax(?:\s*(?:rate|amount))?\s*[:\-]?\s*\$?([0-9,]+\.?\d{0,2})",
-            "total": r"(?i)total\s*[:\-]?\s*\$?([0-9,]+\.?\d{0,2})",
-        }
+        regex = {}
+    if not regex:
+        regex = dict(DEFAULT_REGEX)
     return {
         "version": 1,
         "vendor_hint": "",
         "anchors": {"subtotal": "Subtotal", "tax": "Tax", "total": "Total"},
         "regex": regex,
+        "_learning_backend": backend,
     }
 
 
@@ -73,12 +87,24 @@ def refine_regexes(
         got=got,
         invoice_text=invoice_text[:4000],
     )
-    raw = LLM.invoke(prompt)
+    raw = None
+    backend = "fallback_regex"
     try:
-        data = json.loads(raw)
+        global LLM
+        if LLM is None:
+            LLM = get_ollama_llm(TEXT_MODEL)
+        raw = LLM.invoke(prompt)
+        backend = "ollama"
+    except Exception as exc:
+        print(f"[template_learner] Ollama unavailable for template refinement; keeping current template. {exc}")
+        raw = None
+    try:
+        data = json.loads(raw) if raw else {}
         new_regex = data.get("regex", data)
     except Exception:
-        new_regex = current_regex
+        new_regex = {}
+    if not new_regex:
+        new_regex = current_regex or dict(DEFAULT_REGEX)
 
     new_tmpl = dict(current_template)
     new_tmpl["regex"] = new_regex
@@ -86,4 +112,5 @@ def refine_regexes(
     new_tmpl["refined_field"] = field_name
     new_tmpl["refined_from"] = got
     new_tmpl["refined_to"] = expected
+    new_tmpl["_learning_backend"] = backend
     return new_tmpl

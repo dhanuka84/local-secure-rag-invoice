@@ -6,6 +6,7 @@ langgraph-checkpoint>=1.0.0
 
 # Vector store + cache
 pymilvus>=2.4.0
+milvus-lite>=3.0
 redis>=5.0.0
 
 # Text ranking (Levenshtein / BM25)

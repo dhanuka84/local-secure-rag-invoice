@@ -1,3 +1,6 @@
+import os
+import time
+
 from langgraph.graph import StateGraph, START, END
 
 from .state import InvoiceState
@@ -5,6 +8,7 @@ from .nodes import (
     # Core extraction
     node_extract_pdf,
     node_ocr_if_needed,
+    node_structure_detect,
     node_signature,
     node_check_cache,
     # Decisions
@@ -23,6 +27,26 @@ from .nodes import (
     node_mark_for_review,
     node_done,
 )
+
+TRACE_NODES = os.getenv("INVOICE_TRACE_NODES", "true").lower() == "true"
+
+
+def _timed_node(name, fn):
+    def wrapped(state):
+        started = time.perf_counter()
+        if TRACE_NODES:
+            print(f"[graph] start {name}")
+        out = fn(state)
+        elapsed = time.perf_counter() - started
+        if isinstance(out, dict):
+            timings = dict(out.get("node_timings") or {})
+            timings[name] = round(elapsed, 3)
+            out["node_timings"] = timings
+        if TRACE_NODES:
+            print(f"[graph] done {name} in {elapsed:.3f}s")
+        return out
+
+    return wrapped
 
 
 def build_invoice_graph():
@@ -69,37 +93,39 @@ def build_invoice_graph():
     # ---------- Nodes ----------
 
     # Core pipeline
-    g.add_node("extract_pdf", node_extract_pdf)
-    g.add_node("ocr_if_needed", node_ocr_if_needed)
-    g.add_node("signature", node_signature)
-    g.add_node("check_cache", node_check_cache)
+    g.add_node("extract_pdf", _timed_node("extract_pdf", node_extract_pdf))
+    g.add_node("ocr_if_needed", _timed_node("ocr_if_needed", node_ocr_if_needed))
+    g.add_node("structure_detect", _timed_node("structure_detect", node_structure_detect))
+    g.add_node("signature", _timed_node("signature", node_signature))
+    g.add_node("check_cache", _timed_node("check_cache", node_check_cache))
 
     # Similarity / search
-    g.add_node("milvus_suggest", node_milvus_suggest)
+    g.add_node("milvus_suggest", _timed_node("milvus_suggest", node_milvus_suggest))
 
     # Template-based extraction
-    g.add_node("extract_fields", node_extract_fields)
-    g.add_node("learn_and_stage", node_learn_and_stage)
+    g.add_node("extract_fields", _timed_node("extract_fields", node_extract_fields))
+    g.add_node("learn_and_stage", _timed_node("learn_and_stage", node_learn_and_stage))
 
     # LayoutLM hybrid extraction (no Donut here)
-    g.add_node("hybrid_extract_fields", node_hybrid_extract_fields)
+    g.add_node("hybrid_extract_fields", _timed_node("hybrid_extract_fields", node_hybrid_extract_fields))
 
     # Vision model
-    g.add_node("vision_validate", node_vision_validate)
+    g.add_node("vision_validate", _timed_node("vision_validate", node_vision_validate))
 
     # Promotion / review
-    g.add_node("promote_template", node_promote_template)
-    g.add_node("mark_for_review", node_mark_for_review)
+    g.add_node("promote_template", _timed_node("promote_template", node_promote_template))
+    g.add_node("mark_for_review", _timed_node("mark_for_review", node_mark_for_review))
 
     # Final
-    g.add_node("done", node_done)
+    g.add_node("done", _timed_node("done", node_done))
 
     # ---------- Edges ----------
 
     # Entry point
     g.add_edge(START, "extract_pdf")
     g.add_edge("extract_pdf", "ocr_if_needed")
-    g.add_edge("ocr_if_needed", "signature")
+    g.add_edge("ocr_if_needed", "structure_detect")
+    g.add_edge("structure_detect", "signature")
     g.add_edge("signature", "check_cache")
 
     # Reuse vs search

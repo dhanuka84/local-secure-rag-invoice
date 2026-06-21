@@ -7,10 +7,9 @@ from cerbos.sdk.model import (
     ResourceList,
 )
 
-CERBOS_HOST = os.getenv("CERBOS_HOST", "http://localhost:3592")
+CERBOS_HOST = os.getenv("CERBOS_HOST", "localhost:3593")
 CERBOS_STRICT = os.getenv("CERBOS_STRICT", "false").lower() == "true"
 
-_client = CerbosClient(host=CERBOS_HOST)
 
 
 def can_promote_template(role: str, stage: str) -> bool:
@@ -45,11 +44,12 @@ def can_promote_template(role: str, stage: str) -> bool:
     )
 
     try:
-        # Correct call to client
-        resp = _client.check_resources(
-            principal=principal,
-            resources=res_list,
-        )
+        # Instantiate client locally to avoid long-lived idle gRPC connections timing out
+        with CerbosClient(host=CERBOS_HOST) as client:
+            resp = client.check_resources(
+                principal=principal,
+                resources=res_list,
+            )
 
         # If no results → deny (or allow if not strict)
         if not resp or not resp.results:
